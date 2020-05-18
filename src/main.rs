@@ -69,6 +69,7 @@ impl Display {
 
 /* Vec2 ----------------------------------------------------------- */
 
+#[derive(Clone)]
 struct Vec2 {
     x: i32,
     y: i32
@@ -98,7 +99,7 @@ impl Snake {
         }
     }
 
-    fn move_forward(&mut self, game: &mut Game) {
+    fn move_forward(&mut self, game: &mut Game, food: &mut Option<Vec2>) {
         let new_pos = match self.dir {
             Direction::N => Vec2 { x: self.body[0].x, y: self.body[0].y - 1 },
             Direction::S => Vec2 { x: self.body[0].x, y: self.body[0].y + 1 },
@@ -118,6 +119,12 @@ impl Snake {
             if new_pos.x == part.x && new_pos.y == part.y {
                 game.game_over = true;
             }
+        }
+
+        // check food
+        if new_pos.x == food.as_ref().unwrap().x && new_pos.y == food.as_ref().unwrap().y {
+            self.body.push(self.body[self.body.len() - 1].clone());
+            *food = None;
         }
         
         let mut index = self.body.len() - 1;
@@ -145,7 +152,7 @@ impl Snake {
 /* Game ----------------------------------------------------------- */
 
 struct Game {
-    cell_size: usize,
+    cell_size: i32,
     map: Vec<Vec<Vec2>>,
     game_over: bool,
 }
@@ -186,26 +193,30 @@ fn main() {
 
     let mut snake: Snake = Snake::new();
     snake.body.push(Vec2 {x: 13, y: 13});
-    for i in 0..10 {
-        snake.body.push(Vec2 {x: 13 + i, y: 250});
-    }
+    snake.body.push(Vec2 {x: 14, y: 13});
+    snake.body.push(Vec2 {x: 15, y: 13});
 
-    //let food = Vec2 {rand::thread_rng().gen_range(0.0, 1.0), rand::thread_rng().gen_range(-1.0, 1.0)};
-    let mut events = Events::new(EventSettings::new()).ups(6);
+    let mut food = Some(Vec2 {x: rand::thread_rng().gen_range(0, 25), y: rand::thread_rng().gen_range(0, 25)});
+
+    let mut events = Events::new(EventSettings::new()).ups(5);
     while let Some(e) = events.next(&mut window) {
         if let Some(args) = e.render_args() {
             display.clear(&args);
             snake.draw(&game, &args, &mut display);
-        }
-        if !game.game_over  {
-            if let Some(u) = e.update_args() {
-                snake.move_forward(&mut game);
-            }
+            display.render_rectangle(&args, (food.as_ref().unwrap().x * game.cell_size) as f64, (food.as_ref().unwrap().y * game.cell_size) as f64, game.cell_size as f64, WHITE);
         }
         if let Some(key) = e.button_args() {
             if let Some(dir) = get_new_dir_event(&key, &snake) {
                 snake.dir = dir;
             }
+        }
+        if !game.game_over  {
+            if let Some(u) = e.update_args() {
+                snake.move_forward(&mut game, &mut food);
+            }
+        }
+        if food.is_none() {
+            food = Some(Vec2 {x: rand::thread_rng().gen_range(0, 25), y: rand::thread_rng().gen_range(0, 25)});
         }
     }
 }
