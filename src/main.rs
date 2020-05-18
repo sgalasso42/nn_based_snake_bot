@@ -124,6 +124,7 @@ impl Snake {
         // check food
         if new_pos.x == food.as_ref().unwrap().x && new_pos.y == food.as_ref().unwrap().y {
             self.body.push(self.body[self.body.len() - 1].clone());
+            game.score += 1;
             *food = None;
         }
         
@@ -155,6 +156,7 @@ struct Game {
     cell_size: i32,
     map: Vec<Vec<Vec2>>,
     game_over: bool,
+    score: i32
 }
 
 impl Game {
@@ -162,7 +164,8 @@ impl Game {
         Game {
             cell_size: 20,
             map: (0..size).map(|y| (0..size).map(|x| Vec2::new()).collect()).collect(),
-            game_over: false
+            game_over: true,
+            score: 0
         }
     }
 }
@@ -192,14 +195,21 @@ fn main() {
     let mut display = Display::new(opengl);
 
     let mut snake: Snake = Snake::new();
-    snake.body.push(Vec2 {x: 13, y: 13});
-    snake.body.push(Vec2 {x: 14, y: 13});
-    snake.body.push(Vec2 {x: 15, y: 13});
-
     let mut food = Some(Vec2 {x: rand::thread_rng().gen_range(0, 25), y: rand::thread_rng().gen_range(0, 25)});
 
-    let mut events = Events::new(EventSettings::new()).ups(5);
+    let mut events = Events::new(EventSettings::new()).ups(10);
     while let Some(e) = events.next(&mut window) {
+
+        if game.game_over {
+            println!("SCORE: {}", game.score);
+            game.score = 0;
+            snake.body.clear();
+            snake.body.push(Vec2 {x: 13, y: 13});
+            snake.body.push(Vec2 {x: 14, y: 13});
+            snake.body.push(Vec2 {x: 15, y: 13});
+            game.game_over = false;
+        }
+
         if let Some(args) = e.render_args() {
             display.clear(&args);
             snake.draw(&game, &args, &mut display);
