@@ -14,6 +14,15 @@ fn dsigmoid(y: f64) -> f64 {
     return y * (1.0 - y);
 }
 
+/* Utils ----------------------------------------- */
+
+fn mutate(val: f64, rate: f64) -> f64 {
+    if rand::thread_rng().gen_range(0.0, 1.0) < rate {
+        return rand::thread_rng().gen_range(-1.0, 1.0);
+    }
+    return val;
+}
+
 /* Data ------------------------------------------ */
 
 #[derive(Debug)]
@@ -24,7 +33,10 @@ struct Data {
 
 /* Neural Network -------------------------------- */
 
-struct NeuralNetwork {
+pub struct NeuralNetwork {
+    nb_inputs: usize,
+    nb_hidden: usize,
+    nb_outputs: usize,
     weights_ih: Matrix<f64>,
     weights_ho: Matrix<f64>,
     bias_h: Matrix<f64>,
@@ -33,9 +45,11 @@ struct NeuralNetwork {
 }
 
 impl NeuralNetwork {
-    fn new(nb_inputs: usize, nb_hidden: usize, nb_outputs: usize) -> NeuralNetwork {
+    pub fn new(nb_inputs: usize, nb_hidden: usize, nb_outputs: usize) -> NeuralNetwork {
         NeuralNetwork {
-
+            nb_inputs: nb_inputs,
+            nb_hidden: nb_hidden,
+            nb_outputs: nb_outputs,
             weights_ih: Matrix::new(nb_hidden, nb_inputs, (0..(nb_hidden * nb_inputs)).map(|_| rand::thread_rng().gen_range(-1.0, 1.0)).collect::<Vec<f64>>()),
             weights_ho: Matrix::new(nb_outputs, nb_hidden, (0..(nb_outputs * nb_hidden)).map(|_| rand::thread_rng().gen_range(-1.0, 1.0)).collect::<Vec<f64>>()),
             bias_h: Matrix::new(nb_hidden, 1, (0..nb_hidden).map(|_| rand::thread_rng().gen_range(-1.0, 1.0)).collect::<Vec<f64>>()),
@@ -44,7 +58,7 @@ impl NeuralNetwork {
         }
     }
 
-    fn feedforward(&mut self, inputs: Matrix<f64>) -> Matrix<f64> {
+    pub fn feedforward(&mut self, inputs: Matrix<f64>) -> Matrix<f64> {
         // Feed forward inputs -> hidden
         let mut hidden: Matrix<f64> = &self.weights_ih * &inputs;
         hidden = &hidden + &self.bias_h;
@@ -95,38 +109,11 @@ impl NeuralNetwork {
         // Update outputs bias
         self.bias_h = &self.bias_h + hidden_gradients;
     }
+
+    fn mutate(&mut self, rate: f64) {
+        self.weights_ih = Matrix::new(self.nb_hidden, self.nb_inputs, (0..(self.nb_hidden * self.nb_inputs)).map(|val| mutate(val as f64, rate)).collect::<Vec<f64>>());
+        self.weights_ho = Matrix::new(self.nb_outputs, self.nb_hidden, (0..(self.nb_outputs * self.nb_hidden)).map(|val| mutate(val as f64, rate)).collect::<Vec<f64>>());
+        self.bias_h = Matrix::new(self.nb_hidden, 1, (0..(self.nb_hidden)).map(|val| mutate(val as f64, rate)).collect::<Vec<f64>>());
+        self.bias_o = Matrix::new(self.nb_outputs, 1, (0..(self.nb_outputs)).map(|val| mutate(val as f64, rate)).collect::<Vec<f64>>());
+    }
 }
-
-/* Functions ------------------------------------- */
-
-// fn main() {
-//     let mut neuralnet: NeuralNetwork = NeuralNetwork::new(3, 3, 2);
-
-//     // Exemple :
-//     // > There is a training set for color prediction
-//     // > The algorithm try to find out wether the color is closer to white or black
-//     for _ in 0..50000 {
-//         // Here we generate a random color
-//         let color: (i32, i32, i32) = (rand::thread_rng().gen_range(0, 256), rand::thread_rng().gen_range(0, 256), rand::thread_rng().gen_range(0, 256));
-//         // Here we compute the target that the network has to guess
-//         let targets_tuple: (f64, f64) = if color.0 + color.1 + color.2 > 300 { (1.0, 0.0) } else { (0.0, 1.0) };
-
-//         // Here we format the color to fit in the neural network
-//         let inputs: Matrix<f64> = Matrix::new(3, 1, vec!(color.0 as f64 / 255.0, color.1 as f64 / 255.0, color.2 as f64 / 255.0));
-//         // Here we format the target to fit in the neural network
-//         let targets: Matrix<f64> = Matrix::new(2, 1, vec!(targets_tuple.0, targets_tuple.1));
-//         // Training with the given datas
-//         &neuralnet.train(&inputs, &targets);
-//     }
-
-//     // Testing result, cmp the answer and the guess
-//     for _ in 0..10 {
-//         let color: (i32, i32, i32) = (rand::thread_rng().gen_range(0, 256), rand::thread_rng().gen_range(0, 256), rand::thread_rng().gen_range(0, 256));
-//         println!("color: {:?}", color);
-//         let white_answer: f64 = if color.0 + color.1 + color.2 > 300 { 0.0 } else { 1.0 };
-//         let black_answer: f64 = if color.0 + color.1 + color.2 > 300 { 1.0 } else { 0.0 };
-//         println!("calculated answer    : {}", if color.0 + color.1 + color.2 > 300 { String::from("black") } else { String::from("white") });
-//         let result: Matrix<f64> = neuralnet.feedforward(Matrix::new(3, 1, vec!(color.0 as f64 / 255.0, color.1 as f64 / 255.0, color.2 as f64 / 255.0)));
-//         println!("neural network guess : {} | fitness: {}%\n", if result.data()[0] > result.data()[1] { String::from("black") } else { String::from("white") }, 100 - (((result.data()[0] * white_answer + result.data()[1] * black_answer) / 2.0) * 100.0) as i32);
-//     }
-// }

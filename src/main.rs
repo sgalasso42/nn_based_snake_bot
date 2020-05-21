@@ -3,6 +3,9 @@ extern crate graphics;
 extern crate opengl_graphics;
 extern crate piston;
 extern crate rand;
+extern crate rulinalg;
+
+mod neuralnet;
 
 use glutin_window::GlutinWindow as Window;
 use opengl_graphics::{GlGraphics, OpenGL};
@@ -10,13 +13,21 @@ use piston::event_loop::*;
 use piston::input::*;
 use piston::window::WindowSettings;
 use rand::Rng;
+use rulinalg::matrix::{Matrix, BaseMatrix};
+use std::cmp::Ordering;
 
-mod neuralnet;
+use neuralnet::NeuralNetwork;
 
 // RGBA
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+
+// Cell Type
+const EMPTY: i32 = 0;
+const FOOD: i32 = 1;
+const SNAKE: i32 = 2;
+const HEAD: i32 = 3;
 
 /* Direction ------------------------------------------------------ */
 
@@ -38,25 +49,29 @@ impl Display {
         }
     }
 
-    fn clear(&mut self, args: &RenderArgs) {
-        self.gl.draw(args.viewport(), |_c, gl| {
-            graphics::clear(BLACK, gl);
+    fn clear(&mut self, args: &RenderArgs, x: f64, y: f64, width: f64, height: f64) {
+        let border_rect = graphics::rectangle::rectangle_by_corners(x, y, x + width, y + height);
+        let fill_rect = graphics::rectangle::rectangle_by_corners(x + 1.0, y + 1.0, x + width - 1.0, y + height - 1.0);
+
+        self.gl.draw(args.viewport(), |c, gl| {
+            graphics::rectangle(WHITE, border_rect, c.transform, gl);
+            graphics::rectangle(BLACK, fill_rect, c.transform, gl);
         });
     }
 
-    fn render_point(&mut self, args: &RenderArgs, x: f64, y: f64, size: f64, color: [f32; 4]) {
-        let square = graphics::rectangle::square(x, y, size);
+    // fn render_point(&mut self, args: &RenderArgs, x: f64, y: f64, size: f64, color: [f32; 4]) {
+    //     let square = graphics::rectangle::square(x, y, size);
     
-        self.gl.draw(args.viewport(), |c, gl| {
-            graphics::ellipse(color, square, c.transform, gl);
-        });
-    }
+    //     self.gl.draw(args.viewport(), |c, gl| {
+    //         graphics::ellipse(color, square, c.transform, gl);
+    //     });
+    // }
 
-    fn render_rectangle(&mut self, args: &RenderArgs, x: f64, y: f64, size: f64, color: [f32; 4]) {
-        let square = graphics::rectangle::square(x, y, size);
+    fn render_rectangle(&mut self, args: &RenderArgs, x: f64, y: f64, width: f64, height: f64, color: [f32; 4]) {
+        let rectangle = graphics::rectangle::rectangle_by_corners(x, y, x + width, y + height);
     
         self.gl.draw(args.viewport(), |c, gl| {
-            graphics::rectangle(color, square, c.transform, gl);
+            graphics::rectangle(color, rectangle, c.transform, gl);
         });
     }
 
@@ -69,7 +84,7 @@ impl Display {
 
 /* Vec2 ----------------------------------------------------------- */
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct Vec2 {
     x: i32,
     y: i32
@@ -87,45 +102,43 @@ impl Vec2 {
 /* Snake ---------------------------------------------------------- */
 
 struct Snake {
+    //brain: NeuralNetwork,
     body: Vec<Vec2>,
     dir: Direction
 }
 
 impl Snake {
-    fn new() -> Snake {
+    fn new(/*map_size: usize*/) -> Snake {
         Snake {
+            //brain: NeuralNetwork::new(map_size * map_size, 5, 4),
             body: Vec::new(),
             dir: Direction::W
         }
     }
 
-    fn move_forward(&mut self, game: &mut Game, food: &mut Option<Vec2>) {
+    fn grow(&mut self) {
+        let last = &self.body[self.body.len() - 1];
+        self.body.push(Vec2 {x: last.x, y: last.y});
+    }
+
+    fn move_forward(&mut self, map_w: i32, map_h: i32) -> bool {
         let new_pos = match self.dir {
             Direction::N => Vec2 { x: self.body[0].x, y: self.body[0].y - 1 },
             Direction::S => Vec2 { x: self.body[0].x, y: self.body[0].y + 1 },
             Direction::W => Vec2 { x: self.body[0].x - 1, y: self.body[0].y },
             Direction::E => Vec2 { x: self.body[0].x + 1, y: self.body[0].y },
-            _ => { return ; }
         };
 
         // check wall collision
-        if new_pos.x < 0 || new_pos.x >= game.map.len() as i32 || new_pos.y < 0 || new_pos.y >= game.map.len() as i32 {
-            game.game_over = true;
-            return ;
+        if new_pos.x < 0 || new_pos.x >= map_w || new_pos.y < 0 || new_pos.y >= map_h {
+            return false;
         }
 
         // check tail collission
         for part in self.body.iter() {
             if new_pos.x == part.x && new_pos.y == part.y {
-                game.game_over = true;
+                return false;
             }
-        }
-
-        // check food
-        if new_pos.x == food.as_ref().unwrap().x && new_pos.y == food.as_ref().unwrap().y {
-            self.body.push(self.body[self.body.len() - 1].clone());
-            game.score += 1;
-            *food = None;
         }
         
         let mut index = self.body.len() - 1;
@@ -136,34 +149,47 @@ impl Snake {
         }
 
         self.body[0] = new_pos;
+
+        return true;
     }
 
     fn draw(&self, game: &Game, args: &RenderArgs, display: &mut Display) {
-        for part in 1..self.body.len() {
-            let pos_x = self.body[part].x as f64 * game.cell_size as f64;
-            let pos_y = self.body[part].y as f64 * game.cell_size as f64;
-            display.render_rectangle(args, pos_x, pos_y, game.cell_size as f64, WHITE);
+        for part in 0..self.body.len() {
+            let part_pos = Vec2 {
+                x: game.origin.x + self.body[part].x * game.cell_size.x,
+                y: game.origin.y + self.body[part].y * game.cell_size.y
+            };
+            display.render_rectangle(&args, part_pos.x as f64, part_pos.y as f64, game.cell_size.y as f64, game.cell_size.x as f64, WHITE);
         }
-        let pos_x = self.body[0].x as f64 * game.cell_size as f64;
-        let pos_y = self.body[0].y as f64 * game.cell_size as f64;
-        display.render_rectangle(args, pos_x, pos_y, game.cell_size as f64, RED);
     }
 }
 
 /* Game ----------------------------------------------------------- */
 
 struct Game {
-    cell_size: i32,
+    origin: Vec2,
+    height: i32,
+    width: i32,
+    cell_nb: i32,
+    cell_size: Vec2,
     map: Vec<Vec<Vec2>>,
+    snake: Snake,
+    food: Vec2,
     game_over: bool,
     score: i32
 }
 
 impl Game {
-    fn new(size: i32) -> Game {
+    fn new(origin: Vec2, width: i32, height: i32, cell_nb: i32) -> Game {
         Game {
-            cell_size: 20,
-            map: (0..size).map(|y| (0..size).map(|x| Vec2::new()).collect()).collect(),
+            origin: origin,
+            height: height,
+            width: width,
+            cell_nb: cell_nb,
+            cell_size: Vec2 {x: width / cell_nb, y: height / cell_nb},
+            map: (0..height).map(|y| (0..width).map(|x| Vec2::new()).collect()).collect(),
+            snake: Snake::new(),
+            food: Vec2 {x: rand::thread_rng().gen_range(0, cell_nb), y: rand::thread_rng().gen_range(0, cell_nb)},
             game_over: true,
             score: 0
         }
@@ -172,61 +198,104 @@ impl Game {
 
 /* Functions ------------------------------------------------------ */
 
-fn get_new_dir_event(key: &ButtonArgs, snake: &Snake) -> Option<Direction> {
-    if key.state == ButtonState::Press {
-        if key.button == Button::Keyboard(Key::Up) && snake.dir != Direction::N && snake.dir != Direction::S {
-            return Some(Direction::N);
-        } else if key.button == Button::Keyboard(Key::Down) && snake.dir != Direction::N && snake.dir != Direction::S {
-            return Some(Direction::S);
-        } else if key.button == Button::Keyboard(Key::Left) && snake.dir != Direction::E && snake.dir != Direction::W {
-            return Some(Direction::W);
-        } else if key.button == Button::Keyboard(Key::Right) && snake.dir != Direction::E && snake.dir != Direction::W {
-            return Some(Direction::E);
-        }
-    }
-    return None;
-}
+// fn get_new_dir_event(key: &ButtonArgs, snake: &Snake) -> Option<Direction> {
+//     if key.state == ButtonState::Press {
+//         if key.button == Button::Keyboard(Key::Up) && snake.dir != Direction::N && snake.dir != Direction::S {
+//             return Some(Direction::N);
+//         } else if key.button == Button::Keyboard(Key::Down) && snake.dir != Direction::N && snake.dir != Direction::S {
+//             return Some(Direction::S);
+//         } else if key.button == Button::Keyboard(Key::Left) && snake.dir != Direction::E && snake.dir != Direction::W {
+//             return Some(Direction::W);
+//         } else if key.button == Button::Keyboard(Key::Right) && snake.dir != Direction::E && snake.dir != Direction::W {
+//             return Some(Direction::E);
+//         }
+//     }
+//     return None;
+// }
 
 fn main() {
-    let size = 25;
-    let mut game = Game::new(size);
+    let max_col = 5;
+    let nb_games = 1; // 25
+    let mut games: Vec<Game> = (0..nb_games).map(|index| Game::new(
+        Vec2 {
+            x: (index % max_col) * (1000 / max_col), // origin x
+            y: (index / max_col) * (1000 / max_col) // origin y
+        },
+        1000 / max_col, // width
+        1000 / max_col, // height
+        20
+    )).collect();
+    //let mut game: [Game; 25] = Game::new(size);
     let opengl = OpenGL::V3_2;
-    let mut window: Window = WindowSettings::new("Snake", [(size * 20) as f64, (size * 20) as f64]).graphics_api(opengl).exit_on_esc(true).build().unwrap();
+    let mut window: Window = WindowSettings::new("Snake", [1000, 1000]).graphics_api(opengl).exit_on_esc(true).build().unwrap();
     let mut display = Display::new(opengl);
-
-    let mut snake: Snake = Snake::new();
-    let mut food = Some(Vec2 {x: rand::thread_rng().gen_range(0, 25), y: rand::thread_rng().gen_range(0, 25)});
 
     let mut events = Events::new(EventSettings::new()).ups(10);
     while let Some(e) = events.next(&mut window) {
-
-        if game.game_over {
-            println!("SCORE: {}", game.score);
-            game.score = 0;
-            snake.body.clear();
-            snake.body.push(Vec2 {x: 13, y: 13});
-            snake.body.push(Vec2 {x: 14, y: 13});
-            snake.body.push(Vec2 {x: 15, y: 13});
-            game.game_over = false;
+        for index in 0..games.len() {
+            if games[index].game_over {
+                println!("SCORE: {}", games[index].score);
+                games[index].score = 0;
+                games[index].snake.body.clear();
+                games[index].snake.body = (0..3).map(|i| Vec2 {x: games[index].cell_nb / 2 + i, y: games[index].cell_nb / 2}).collect();
+                games[index].snake.dir = Direction::W;
+                games[index].game_over = false;
+            }
         }
-
+    
         if let Some(args) = e.render_args() {
-            display.clear(&args);
-            snake.draw(&game, &args, &mut display);
-            display.render_rectangle(&args, (food.as_ref().unwrap().x * game.cell_size) as f64, (food.as_ref().unwrap().y * game.cell_size) as f64, game.cell_size as f64, WHITE);
-        }
-        if let Some(key) = e.button_args() {
-            if let Some(dir) = get_new_dir_event(&key, &snake) {
-                snake.dir = dir;
+            for index in 0..games.len() {
+                display.clear(&args, games[index].origin.x as f64, games[index].origin.y as f64, games[index].width as f64, games[index].height as f64);
+                games[index].snake.draw(&games[index], &args, &mut display);
+                let food_pos = Vec2 {
+                    x: games[index].origin.x + games[index].food.x * games[index].cell_size.x,
+                    y: games[index].origin.y + games[index].food.y * games[index].cell_size.y
+                };
+                display.render_rectangle(&args, food_pos.x as f64, food_pos.y as f64, games[index].cell_size.y as f64, games[index].cell_size.x as f64, WHITE);
             }
         }
-        if !game.game_over  {
-            if let Some(u) = e.update_args() {
-                snake.move_forward(&mut game, &mut food);
+    
+        // if let Some(key) = e.button_args() {
+        //     if let Some(dir) = get_new_dir_event(&key, &snake) {
+        //         snake.dir = dir;
+        //     }
+        // }
+        
+        if let Some(u) = e.update_args() {
+            for index in 0..games.len() {
+                if !games[index].game_over  {
+                    // let mut inputs: Vec<f64> = (0..(size * size)).map(|_| EMPTY as f64).collect();
+                    // inputs[(food.as_ref().unwrap().y * size + food.as_ref().unwrap().x) as usize] = FOOD as f64;
+                    // for part in snake.body.iter() {
+                    //     inputs[(part.y * size + part.x) as usize] = SNAKE as f64;
+                    // }
+                    // inputs[(snake.body[0].y * size + snake.body[0].x) as usize] = HEAD as f64;
+        
+                    // let result: Matrix<f64> = snake.brain.feedforward(Matrix::new(inputs.len(), 1, inputs));
+        
+                    // let max_index = result.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal)).map(|(index, _)| index);
+        
+                    // let newdir = match max_index {
+                    //     Some(0) => Direction::N,
+                    //     Some(1) => Direction::S,
+                    //     Some(2) => Direction::W,
+                    //     _ => Direction::E,
+                    // };
+                    // snake.dir = newdir;
+                    let map_w = games[index].width;
+                    let map_h = games[index].height;
+                    if games[index].snake.move_forward(map_w, map_h) == false {
+                        games[index].game_over = true;
+                    }
+
+                    // check food
+                    if games[index].snake.body[0].x == games[index].food.x && games[index].snake.body[0].y == games[index].food.y {
+                        games[index].snake.grow();
+                        games[index].food = Vec2 {x: rand::thread_rng().gen_range(0, games[index].cell_nb), y: rand::thread_rng().gen_range(0, games[index].cell_nb)};
+                        games[index].score += 1;
+                    }
+                }
             }
-        }
-        if food.is_none() {
-            food = Some(Vec2 {x: rand::thread_rng().gen_range(0, 25), y: rand::thread_rng().gen_range(0, 25)});
         }
     }
 }
