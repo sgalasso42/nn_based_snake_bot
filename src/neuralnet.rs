@@ -16,8 +16,8 @@ fn dsigmoid(y: f64) -> f64 {
 
 /* Utils ----------------------------------------- */
 
-fn mutate(val: f64, rate: f64) -> f64 {
-    if rand::thread_rng().gen_range(0.0, 1.0) < rate {
+fn mutate(val: f64) -> f64 {
+    if rand::thread_rng().gen_range(0.0, 1.0) < 0.1 { // 10%
         return rand::thread_rng().gen_range(-1.0, 1.0);
     }
     return val;
@@ -33,6 +33,7 @@ struct Data {
 
 /* Neural Network -------------------------------- */
 
+#[derive(Clone)]
 pub struct NeuralNetwork {
     nb_inputs: usize,
     nb_hidden: usize,
@@ -110,10 +111,15 @@ impl NeuralNetwork {
         self.bias_h = &self.bias_h + hidden_gradients;
     }
 
-    fn mutate(&mut self, rate: f64) {
-        self.weights_ih = Matrix::new(self.nb_hidden, self.nb_inputs, (0..(self.nb_hidden * self.nb_inputs)).map(|val| mutate(val as f64, rate)).collect::<Vec<f64>>());
-        self.weights_ho = Matrix::new(self.nb_outputs, self.nb_hidden, (0..(self.nb_outputs * self.nb_hidden)).map(|val| mutate(val as f64, rate)).collect::<Vec<f64>>());
-        self.bias_h = Matrix::new(self.nb_hidden, 1, (0..(self.nb_hidden)).map(|val| mutate(val as f64, rate)).collect::<Vec<f64>>());
-        self.bias_o = Matrix::new(self.nb_outputs, 1, (0..(self.nb_outputs)).map(|val| mutate(val as f64, rate)).collect::<Vec<f64>>());
+    pub fn mutate(&mut self) {
+        let mut new_weights_ih = self.weights_ih.clone();
+        let mut new_weights_ho = self.weights_ho.clone();
+        let mut new_bias_h = self.bias_h.clone();
+        let mut new_bias_o = self.bias_o.clone();
+
+        self.weights_ih = new_weights_ih.apply(&mutate);
+        self.weights_ho = new_weights_ho.apply(&mutate);
+        self.bias_h = new_bias_h.apply(&mutate);
+        self.bias_o = new_bias_o.apply(&mutate);
     }
 }

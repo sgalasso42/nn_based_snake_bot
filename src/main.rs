@@ -31,7 +31,7 @@ const HEAD: i32 = 3;
 
 /* Direction ------------------------------------------------------ */
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Direction {
     N, S, W, E, None
 }
@@ -49,12 +49,12 @@ impl Display {
         }
     }
 
-    fn clear(&mut self, args: &RenderArgs, x: f64, y: f64, width: f64, height: f64) {
+    fn clear(&mut self, args: &RenderArgs, x: f64, y: f64, width: f64, height: f64, game_over: bool) {
         let border_rect = graphics::rectangle::rectangle_by_corners(x, y, x + width, y + height);
         let fill_rect = graphics::rectangle::rectangle_by_corners(x + 1.0, y + 1.0, x + width - 1.0, y + height - 1.0);
 
         self.gl.draw(args.viewport(), |c, gl| {
-            graphics::rectangle(WHITE, border_rect, c.transform, gl);
+            graphics::rectangle(if game_over { RED } else { WHITE }, border_rect, c.transform, gl);
             graphics::rectangle(BLACK, fill_rect, c.transform, gl);
         });
     }
@@ -101,6 +101,7 @@ impl Vec2 {
 
 /* Snake ---------------------------------------------------------- */
 
+#[derive(Clone)]
 struct Snake {
     brain: NeuralNetwork,
     body: Vec<Vec2>,
@@ -108,10 +109,10 @@ struct Snake {
 }
 
 impl Snake {
-    fn new(cell_nb: usize) -> Snake {
+    fn new(cell_nb: usize, brain: NeuralNetwork) -> Snake {
         Snake {
-            brain: NeuralNetwork::new(cell_nb * cell_nb, 5, 4),
-            body: Vec::new(),
+            brain: brain,
+            body: (0..3).map(|i| Vec2 {x: cell_nb as i32 / 2 + i, y: cell_nb as i32 / 2}).collect(),
             dir: Direction::None
         }
     }
@@ -167,6 +168,7 @@ impl Snake {
 
 /* Game ----------------------------------------------------------- */
 
+#[derive(Clone)]
 struct Game {
     origin: Vec2,
     height: i32,
@@ -177,11 +179,12 @@ struct Game {
     snake: Snake,
     food: Vec2,
     game_over: bool,
-    score: i32
+    score: f64,
+    time_alive: f64
 }
 
 impl Game {
-    fn new(origin: Vec2, width: i32, height: i32, cell_nb: i32) -> Game {
+    fn new(origin: Vec2, width: i32, height: i32, cell_nb: i32, snake: Snake) -> Game {
         Game {
             origin: origin,
             height: height,
@@ -189,10 +192,11 @@ impl Game {
             cell_nb: cell_nb,
             cell_size: Vec2 {x: width / cell_nb, y: height / cell_nb},
             map: (0..height).map(|y| (0..width).map(|x| Vec2::new()).collect()).collect(),
-            snake: Snake::new(cell_nb as usize),
+            snake: snake,
             food: Vec2 {x: rand::thread_rng().gen_range(0, cell_nb), y: rand::thread_rng().gen_range(0, cell_nb)},
-            game_over: true,
-            score: 0
+            game_over: false,
+            score: 0.0,
+            time_alive: 0.0
         }
     }
 }
@@ -215,29 +219,83 @@ impl Game {
 // }
 
 fn main() {
-    let max_col = 5;
-    let nb_games = 1; // 25
-    let mut games: Vec<Game> = (0..nb_games).map(|index| Game::new(Vec2 {x: (index % max_col) * (1000 / max_col), y: (index / max_col) * (1000 / max_col)}, 1000 / max_col, 1000 / max_col, 20)).collect();
     let opengl = OpenGL::V3_2;
     let mut window: Window = WindowSettings::new("Snake", [1000, 1000]).graphics_api(opengl).exit_on_esc(true).build().unwrap();
     let mut display = Display::new(opengl);
 
+    let mut generation_nb = 0;
+
+    let max_col = 5;
+    let nb_games = 12;
+    let cell_nb = 20;
+
+    let mut games: Vec<Game> = (0..nb_games).map(|index| Game::new(
+        Vec2 {x: (index % max_col) * (1000 / max_col), y: (index / max_col) * (1000 / max_col)},
+        1000 / max_col, 1000 / max_col, cell_nb,
+        Snake::new(cell_nb as usize, NeuralNetwork::new(cell_nb as usize * cell_nb as usize, 5, 4))
+    )).collect();
+    let mut snakes_alive = nb_games;
+
     let mut events = Events::new(EventSettings::new()).ups(10);
     while let Some(e) = events.next(&mut window) {
-        for index in 0..games.len() {
-            if games[index].game_over {
-                println!("SCORE: {}", games[index].score);
-                games[index].score = 0;
-                games[index].snake.body.clear();
-                games[index].snake.body = (0..3).map(|i| Vec2 {x: games[index].cell_nb / 2 + i, y: games[index].cell_nb / 2}).collect();
-                games[index].snake.dir = Direction::W;
-                games[index].game_over = false;
+        if snakes_alive == 0 {
+            // calculate score
+            for index in 0..games.len() {
+                games[index].score = games[index].score * 100.0 + games[index].time_alive / 100.0; // maybe to refactor
             }
+
+            // calculate total score
+            let mut totalscore = 0.0;
+            for game in games.iter() {
+                totalscore += game.score;
+                eprintln!("score_raw: {}", game.score);
+            }
+
+            eprintln!("gen: {} raw_tot: {}", generation_nb, totalscore);
+            
+            // calculate fitness
+            if totalscore != 0.0 {
+                for i in 0..games.len() {
+                    games[i].score = games[i].score / totalscore;
+                    eprintln!("score: {}", games[i].score);
+                }
+            }
+
+            let mut newgames = games.clone();
+            for index in 0..games.len() {
+                // pick brain
+                let mut brain = games[rand::thread_rng().gen_range(0, nb_games) as usize].snake.brain.clone();
+                if totalscore > 0.0 {                    
+                    let mut r: f64 = rand::thread_rng().gen_range(0.0, 1.0);
+                    let mut i = 0;
+                    while r > 0.0 {
+                        eprint!("r: {} - games[{}].score: {} ", r, i, games[i].score);
+                        r -= games[i].score;
+                        eprintln!("= r: {}", r);
+                        i += 1;
+                    }
+                    let brain = games[i - 1].snake.brain.clone();
+                }
+                eprintln!("---");
+
+                // mutate child brain
+                brain.mutate(); // rate is in neuralnet.rs / mutate()
+
+                newgames[index].snake = Snake::new(cell_nb as usize, brain);
+                newgames[index].time_alive = 0.0;
+                newgames[index].score = 0.0;
+                newgames[index].game_over = false;
+                newgames[index].food = Vec2 {x: rand::thread_rng().gen_range(0, cell_nb), y: rand::thread_rng().gen_range(0, cell_nb)};
+            }
+            games = newgames;
+
+            snakes_alive = nb_games;
+            generation_nb += 1;
         }
     
         if let Some(args) = e.render_args() {
             for index in 0..games.len() {
-                display.clear(&args, games[index].origin.x as f64, games[index].origin.y as f64, games[index].width as f64, games[index].height as f64);
+                display.clear(&args, games[index].origin.x as f64, games[index].origin.y as f64, games[index].width as f64, games[index].height as f64, games[index].game_over);
                 games[index].snake.draw(&games[index], &args, &mut display);
                 let food_pos = Vec2 {
                     x: games[index].origin.x + games[index].food.x * games[index].cell_size.x,
@@ -254,39 +312,43 @@ fn main() {
         // }
         
         if let Some(u) = e.update_args() {
-            for index in 0..games.len() {
-                if !games[index].game_over  {
+            if snakes_alive > 0 {
+                for index in 0..games.len() {
+                    if !games[index].game_over  {
 
-                    let mut inputs: Vec<f64> = (0..(games[index].cell_nb * games[index].cell_nb)).map(|_| EMPTY as f64).collect();
-                    inputs[(games[index].food.y * games[index].cell_nb + games[index].food.x) as usize] = FOOD as f64;
-                    for part in games[index].snake.body.iter() {
-                        inputs[(part.y * games[index].cell_nb + part.x) as usize] = SNAKE as f64;
-                    }
-                    inputs[(games[index].snake.body[0].y * games[index].cell_nb + games[index].snake.body[0].x) as usize] = HEAD as f64;
-        
-                    let result: Matrix<f64> = games[index].snake.brain.feedforward(Matrix::new(inputs.len(), 1, inputs));
-        
-                    let max_index = result.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal)).map(|(index, _)| index);
-        
-                    let newdir = match max_index {
-                        Some(0) => Direction::N,
-                        Some(1) => Direction::S,
-                        Some(2) => Direction::W,
-                        _ => Direction::E,
-                    };
+                        let mut inputs: Vec<f64> = (0..(games[index].cell_nb * games[index].cell_nb)).map(|_| EMPTY as f64).collect();
+                        inputs[(games[index].food.y * games[index].cell_nb + games[index].food.x) as usize] = FOOD as f64;
+                        for part in games[index].snake.body.iter() {
+                            inputs[(part.y * games[index].cell_nb + part.x) as usize] = SNAKE as f64;
+                        }
+                        inputs[(games[index].snake.body[0].y * games[index].cell_nb + games[index].snake.body[0].x) as usize] = HEAD as f64;
+            
+                        let result: Matrix<f64> = games[index].snake.brain.feedforward(Matrix::new(inputs.len(), 1, inputs));
+            
+                        let max_index = result.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(Ordering::Equal)).map(|(index, _)| index);
+            
+                        let newdir = match max_index {
+                            Some(0) => Direction::N,
+                            Some(1) => Direction::S,
+                            Some(2) => Direction::W,
+                            _ => Direction::E,
+                        };
 
-                    games[index].snake.dir = newdir;
+                        games[index].snake.dir = newdir;
 
-                    let cell_nb = games[index].cell_nb;
-                    if games[index].snake.move_forward(cell_nb) == false {
-                        games[index].game_over = true;
-                    }
+                        let cell_nb = games[index].cell_nb;
+                        games[index].time_alive += 1.0;
+                        if games[index].snake.move_forward(cell_nb) == false {
+                            games[index].game_over = true;
+                            snakes_alive -= 1;
+                        }
 
-                    // check food
-                    if games[index].snake.body[0].x == games[index].food.x && games[index].snake.body[0].y == games[index].food.y {
-                        games[index].snake.grow();
-                        games[index].food = Vec2 {x: rand::thread_rng().gen_range(0, games[index].cell_nb), y: rand::thread_rng().gen_range(0, games[index].cell_nb)};
-                        games[index].score += 1;
+                        // check food
+                        if games[index].snake.body[0].x == games[index].food.x && games[index].snake.body[0].y == games[index].food.y {
+                            games[index].snake.grow();
+                            games[index].food = Vec2 {x: rand::thread_rng().gen_range(0, games[index].cell_nb), y: rand::thread_rng().gen_range(0, games[index].cell_nb)};
+                            games[index].score += 1.0;
+                        }
                     }
                 }
             }
