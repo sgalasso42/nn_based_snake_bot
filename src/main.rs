@@ -223,10 +223,12 @@ fn main() {
     let mut window: Window = WindowSettings::new("Snake", [1000, 1000]).graphics_api(opengl).exit_on_esc(true).build().unwrap();
     let mut display = Display::new(opengl);
 
+    let mut test_mode = false;
+
     let mut generation_nb = 0;
 
-    let max_col = 5;
-    let nb_games = 12;
+    let max_col = 10;
+    let nb_games = 100;
     let cell_nb = 20;
 
     let mut games: Vec<Game> = (0..nb_games).map(|index| Game::new(
@@ -236,19 +238,19 @@ fn main() {
     )).collect();
     let mut snakes_alive = nb_games;
 
-    let mut events = Events::new(EventSettings::new()).ups(10);
+    let mut events = Events::new(EventSettings::new()).ups(50);
     while let Some(e) = events.next(&mut window) {
         if snakes_alive == 0 {
             // calculate score
             for index in 0..games.len() {
-                games[index].score = games[index].score * 100.0 + games[index].time_alive / 100.0; // maybe to refactor
+                games[index].score = /*games[index].score * 100.0 + */games[index].time_alive; // maybe to refactor
             }
 
             // calculate total score
             let mut totalscore = 0.0;
             for game in games.iter() {
                 totalscore += game.score;
-                eprintln!("score_raw: {}", game.score);
+                // eprintln!("score_raw: {}", game.score);
             }
 
             eprintln!("gen: {} raw_tot: {}", generation_nb, totalscore);
@@ -257,7 +259,7 @@ fn main() {
             if totalscore != 0.0 {
                 for i in 0..games.len() {
                     games[i].score = games[i].score / totalscore;
-                    eprintln!("score: {}", games[i].score);
+                    // eprintln!("score: {}", games[i].score);
                 }
             }
 
@@ -269,14 +271,14 @@ fn main() {
                     let mut r: f64 = rand::thread_rng().gen_range(0.0, 1.0);
                     let mut i = 0;
                     while r > 0.0 {
-                        eprint!("r: {} - games[{}].score: {} ", r, i, games[i].score);
+                        // eprint!("r: {} - games[{}].score: {} ", r, i, games[i].score);
                         r -= games[i].score;
-                        eprintln!("= r: {}", r);
+                        // eprintln!("= r: {}", r);
                         i += 1;
                     }
                     let brain = games[i - 1].snake.brain.clone();
                 }
-                eprintln!("---");
+                // eprintln!("---");
 
                 // mutate child brain
                 brain.mutate(); // rate is in neuralnet.rs / mutate()
@@ -294,22 +296,30 @@ fn main() {
         }
     
         if let Some(args) = e.render_args() {
-            for index in 0..games.len() {
-                display.clear(&args, games[index].origin.x as f64, games[index].origin.y as f64, games[index].width as f64, games[index].height as f64, games[index].game_over);
-                games[index].snake.draw(&games[index], &args, &mut display);
-                let food_pos = Vec2 {
-                    x: games[index].origin.x + games[index].food.x * games[index].cell_size.x,
-                    y: games[index].origin.y + games[index].food.y * games[index].cell_size.y
-                };
-                display.render_rectangle(&args, food_pos.x as f64, food_pos.y as f64, games[index].cell_size.y as f64, games[index].cell_size.x as f64, WHITE);
+            if test_mode {
+                for index in 0..games.len() {
+                    display.clear(&args, games[index].origin.x as f64, games[index].origin.y as f64, games[index].width as f64, games[index].height as f64, games[index].game_over);
+                    games[index].snake.draw(&games[index], &args, &mut display);
+                    let food_pos = Vec2 {
+                        x: games[index].origin.x + games[index].food.x * games[index].cell_size.x,
+                        y: games[index].origin.y + games[index].food.y * games[index].cell_size.y
+                    };
+                    display.render_rectangle(&args, food_pos.x as f64, food_pos.y as f64, games[index].cell_size.y as f64, games[index].cell_size.x as f64, WHITE);
+                }
             }
         }
     
-        // if let Some(key) = e.button_args() {
-        //     if let Some(dir) = get_new_dir_event(&key, &snake) {
-        //         snake.dir = dir;
-        //     }
-        // }
+        if let Some(key) = e.button_args() {
+            // if let Some(dir) = get_new_dir_event(&key, &snake) {
+            //     snake.dir = dir;
+            // }
+            if key.state == ButtonState::Press {
+                if key.button == Button::Keyboard(Key::Up) {
+                    eprintln!("SWITCH MODE");
+                    test_mode = if test_mode { false } else { true };
+                }
+            }
+        }
         
         if let Some(u) = e.update_args() {
             if snakes_alive > 0 {
@@ -322,6 +332,14 @@ fn main() {
                             inputs[(part.y * games[index].cell_nb + part.x) as usize] = SNAKE as f64;
                         }
                         inputs[(games[index].snake.body[0].y * games[index].cell_nb + games[index].snake.body[0].x) as usize] = HEAD as f64;
+
+                        // for (i, pos) in inputs.iter().enumerate() {
+                        //     eprint!("[{}]", pos);
+                        //     if i as i32 % games[index].cell_nb == 0 {
+                        //         eprint!("\n");
+                        //     }
+                        // }
+                        // eprint!("\n");
             
                         let result: Matrix<f64> = games[index].snake.brain.feedforward(Matrix::new(inputs.len(), 1, inputs));
             
@@ -339,6 +357,12 @@ fn main() {
                         let cell_nb = games[index].cell_nb;
                         games[index].time_alive += 1.0;
                         if games[index].snake.move_forward(cell_nb) == false {
+                            games[index].game_over = true;
+                            snakes_alive -= 1;
+                        }
+
+                        // check infinite loop
+                        if games[index].time_alive > 50.0 {
                             games[index].game_over = true;
                             snakes_alive -= 1;
                         }

@@ -17,7 +17,7 @@ fn dsigmoid(y: f64) -> f64 {
 /* Utils ----------------------------------------- */
 
 fn mutate(val: f64) -> f64 {
-    if rand::thread_rng().gen_range(0.0, 1.0) < 0.1 { // 10%
+    if rand::thread_rng().gen_range(0.0, 1.0) < 0.01 { // 1%
         return rand::thread_rng().gen_range(-1.0, 1.0);
     }
     return val;
